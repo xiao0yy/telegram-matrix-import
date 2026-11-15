@@ -19,6 +19,13 @@ def output(*args):
     return subprocess.check_output(args, cwd=ROOT, text=True)
 
 
+def archive_metadata(entry):
+    # Do not ship the ephemeral GitHub runner's UID/GID in the public archive.
+    entry.uid = entry.gid = 0
+    entry.uname = entry.gname = 'root'
+    return entry
+
+
 def modules():
     text = output(GO, 'list', '-deps', '-json', '-tags',
                   'goolm,netgo,osusergo,sqlite_omit_load_extension', './cmd/tg-import')
@@ -77,7 +84,7 @@ def main():
         artifact = dist / 'tg-import-linux-amd64.tar.gz'
         with tarfile.open(artifact, 'w:gz') as archive:
             for item in sorted(stage.iterdir()):
-                archive.add(item, arcname=item.name)
+                archive.add(item, arcname=item.name, filter=archive_metadata)
     checksum = hashlib.sha256()
     with artifact.open('rb') as src:
         while chunk := src.read(1024 * 1024):

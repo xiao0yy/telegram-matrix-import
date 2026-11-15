@@ -17,7 +17,7 @@ GitHub 仓库：[xiao0yy/telegram-matrix-import](https://github.com/xiao0yy/tele
 ```sh
 sha256sum -c SHA256SUMS
 mkdir tg-import
-tar -xzf tg-import-linux-amd64.tar.gz -C tg-import
+tar --no-same-owner -xzf tg-import-linux-amd64.tar.gz -C tg-import
 ./tg-import/tg-import version
 ./tg-import/tg-import -help
 ```
