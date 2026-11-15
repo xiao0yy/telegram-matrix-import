@@ -1,0 +1,12 @@
+/bin/
+/dist/
+/config.*.json
+!/config.example.json
+/.env*
+__pycache__/
+/state/
+/config.json
+*.db
+*.db-shm
+*.db-wal
+*.session

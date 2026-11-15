@@ -1,0 +1,36 @@
+{
+  "state": "/opt/telegram-import/state/example-conversation",
+  "telegram": {
+    "api_id": 0,
+    "api_hash": "REPLACE",
+    "borrow_bridge_session": false,
+    "peer": {"kind": "user", "username": "example_bot"}
+  },
+  "matrix": {
+    "url": "http://127.0.0.1:8008",
+    "server": "matrix.example.com",
+    "bot": "@telegrambot:matrix.example.com",
+    "as_token": "REPLACE",
+    "admin_token": "REPLACE",
+    "admin_user": "@owner:matrix.example.com",
+    "ghost_prefix": "telegram_",
+    "media_prefix": "matrix-media/"
+  },
+  "s3": {
+    "endpoint": "https://s3.REGION.backblazeb2.com",
+    "bucket": "REPLACE",
+    "region": "REPLACE",
+    "access_key": "REPLACE",
+    "secret_key": "REPLACE"
+  },
+  "bridge": {
+    "database": "/opt/matrix/deploy/telegram/data/telegram.db",
+    "container": "telegram-bridge",
+    "image": "sha256:REPLACE_WITH_DOCKER_INSPECT_IMAGE_ID",
+    "bridge_id": "",
+    "login_id": "REPLACE_WITH_TELEGRAM_ACCOUNT_ID",
+    "owner": "@owner:matrix.example.com",
+    "crypto_account": "",
+    "crypto_pickle_key": "REPLACE_WITH_BRIDGE_ENCRYPTION_PICKLE_KEY"
+  }
+}
