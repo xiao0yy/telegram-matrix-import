@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/gotd/td v0.165.1
 	github.com/mattn/go-sqlite3 v1.14.52
+	go.mau.fi/util v0.11.0
 	golang.org/x/term v0.47.0
 	maunium.net/go/mautrix v0.32.0
 )
@@ -40,10 +41,9 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/yuin/goldmark v1.8.6 // indirect
-	go.mau.fi/util v0.11.0 // indirect
-	go.opentelemetry.io/otel v1.44.0 // indirect
-	go.opentelemetry.io/otel/metric v1.44.0 // indirect
-	go.opentelemetry.io/otel/trace v1.44.0 // indirect
+	go.opentelemetry.io/otel v1.47.0 // indirect
+	go.opentelemetry.io/otel/metric v1.47.0 // indirect
+	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
