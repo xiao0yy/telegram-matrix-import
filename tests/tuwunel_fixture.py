@@ -119,7 +119,9 @@ exclusive = false
 '''.replace('"@.*:import\\.test"', "'@.*:import\\.test'"))
     name='tg-import-isolated-'+uuid.uuid4().hex[:10]
     try:
-        subprocess.run(['docker','run','-d','--name',name,'--network','host','--user','0:0','--memory','160m','--memory-swap','256m','--pids-limit','96','--mount',f'type=bind,src={work},dst=/fixture','-e','TUWUNEL_CONFIG=/fixture/tuwunel.toml',IMAGE,'--execute','users create owner fixture-password','--execute','users make-user-admin owner'],check=True,stdout=subprocess.DEVNULL)
+        # Match the runner's UID so it can remove the fixture database after
+        # Docker exits, including on GitHub's non-root runners.
+        subprocess.run(['docker','run','-d','--name',name,'--network','host','--user',f'{os.getuid()}:{os.getgid()}','--memory','160m','--memory-swap','256m','--pids-limit','96','--mount',f'type=bind,src={work},dst=/fixture','-e','TUWUNEL_CONFIG=/fixture/tuwunel.toml',IMAGE,'--execute','users create owner fixture-password','--execute','users make-user-admin owner'],check=True,stdout=subprocess.DEVNULL)
         for _ in range(240):
             try:
                 urllib.request.urlopen('http://127.0.0.1:19792/_matrix/client/versions',timeout=1).read();break
