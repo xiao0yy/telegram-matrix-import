@@ -188,7 +188,7 @@ func run(ctx context.Context) error {
 	identityRaw, _ := json.Marshal([]any{c.Telegram.APIID, c.Telegram.Peer.Kind, c.Telegram.Peer.ID, c.Bridge.LoginID, c.Matrix.Server, mx.Room, c.Matrix.GhostPrefix, c.S3.Endpoint, c.S3.Bucket, c.Matrix.MediaPrefix})
 	identityHash := sha256.Sum256(identityRaw)
 	identity := hex.EncodeToString(identityHash[:])
-	engine := &importer.Engine{Journal: j, Matrix: mx, Objects: &c.S3, Identity: identity, Attempts: 5, RetryDelay: 5 * time.Second, Progress: emit, BeforeMessage: c.Bridge.Stopped}
+	engine := &importer.Engine{Journal: j, Matrix: mx, Objects: &c.S3, Identity: identity, Attempts: 5, RetryDelay: 5 * time.Second, Progress: func(progress map[string]any) { emit(progress) }, BeforeMessage: c.Bridge.Stopped}
 	if cmd == "cleanup" {
 		if e = j.Bind(identity); e != nil {
 			return e
