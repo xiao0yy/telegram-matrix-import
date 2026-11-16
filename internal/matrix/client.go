@@ -27,15 +27,16 @@ import (
 )
 
 type Config struct {
-	URL         string `json:"url"`
-	Server      string `json:"server"`
-	Room        string `json:"room"`
-	Bot         string `json:"bot"`
-	ASToken     string `json:"as_token"`
-	AdminToken  string `json:"admin_token"`
-	AdminUser   string `json:"admin_user"`
-	GhostPrefix string `json:"ghost_prefix"`
-	MediaPrefix string `json:"media_prefix"`
+	URL            string `json:"url"`
+	Server         string `json:"server"`
+	Room           string `json:"room"`
+	Bot            string `json:"bot"`
+	ASToken        string `json:"as_token"`
+	AdminToken     string `json:"admin_token"`
+	AdminUser      string `json:"admin_user"`
+	GhostPrefix    string `json:"ghost_prefix"`
+	MediaPrefix    string `json:"media_prefix"`
+	ClientIPHeader string `json:"client_ip_header,omitempty"`
 }
 type Client struct {
 	Config
@@ -93,6 +94,9 @@ func (c *Client) request(ctx context.Context, method, path, user string, body []
 			Message string `json:"error"`
 		}
 		_ = json.Unmarshal(b, &x)
+		if x.Message == "" {
+			x.Message = strings.TrimSpace(string(b))
+		}
 		for _, secret := range []string{c.ASToken, c.AdminToken} {
 			if secret != "" {
 				x.Message = strings.ReplaceAll(x.Message, secret, "[redacted]")
@@ -117,7 +121,33 @@ func New(cfg Config, state string) (*Client, error) {
 	if cfg.Server == "" || cfg.Bot == "" || cfg.ASToken == "" || cfg.GhostPrefix == "" || cfg.MediaPrefix == "" {
 		return nil, errors.New("incomplete Matrix configuration")
 	}
-	return &Client{Config: cfg, stateDir: state, ghosts: map[string]bool{}, HTTP: &http.Client{Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	cfg.ClientIPHeader = http.CanonicalHeaderKey(cfg.ClientIPHeader)
+	switch cfg.ClientIPHeader {
+	case "", "X-Real-Ip", "X-Forwarded-For", "Cf-Connecting-Ip":
+	default:
+		return nil, errors.New("unsupported client_ip_header; use X-Real-IP, X-Forwarded-For or CF-Connecting-IP")
+	}
+	transport := &localTransport{header: cfg.ClientIPHeader, host: u.Host, base: http.DefaultTransport}
+	return &Client{Config: cfg, stateDir: state, ghosts: map[string]bool{}, HTTP: &http.Client{Transport: transport, Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+}
+
+// The appservice and crypto SDK share this transport. Headers identifying a
+// local client must never be forwarded to a different origin.
+type localTransport struct {
+	header string
+	host   string
+	base   http.RoundTripper
+}
+
+func (t *localTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Scheme != "http" || req.URL.Host != t.host {
+		return nil, errors.New("Matrix request must use the configured loopback origin")
+	}
+	if t.header != "" {
+		req = req.Clone(req.Context())
+		req.Header.Set(t.header, "127.0.0.1")
+	}
+	return t.base.RoundTrip(req)
 }
 func (c *Client) InitCrypto(ctx context.Context) error {
 	b, _, err := c.request(ctx, "GET", "/_matrix/client/v3/rooms/"+url.PathEscape(c.Room)+"/state/m.room.encryption/", c.Bot, nil, "application/json", 1<<20, false)

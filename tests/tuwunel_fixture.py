@@ -93,6 +93,7 @@ def main():
 server_name = "import.test"
 address = "127.0.0.1"
 port = 19792
+ip_source = "x_real_ip"
 database_path = "/fixture/data"
 allow_federation = false
 db_cache_capacity_mb = 8

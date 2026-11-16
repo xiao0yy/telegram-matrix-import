@@ -54,7 +54,7 @@ make dist VERSION=dev COMMIT="$(git rev-parse HEAD)"
 
 将 `config.example.json` 复制到仓库之外的私密路径，填入本机实际配置并设为 `0600`。`state` 使用独立的绝对路径，权限必须为 `0700`。每个会话使用一个状态目录；其中含登录凭据、消息记录、文件密钥和加密数据库，不要提交到 Git。
 
-`matrix.as_token` 来自桥的 appservice；`admin_token` 是有媒体删除权限的管理员凭据，若使用 double-puppet appservice token，`admin_user` 填管理员 MXID。S3 配置必须与 Tuwunel 当前使用的单一媒体后端及前缀一致，并支持对象版本、multipart、列举与删除指定版本。
+`matrix.as_token` 来自桥的 appservice；`admin_token` 是有媒体删除权限的管理员凭据，若使用 double-puppet appservice token，`admin_user` 填管理员 MXID。若 Tuwunel 的 `ip_source` 要求代理请求头，设置 `matrix.client_ip_header` 为对应头名（例如 `X-Real-IP`）；本地请求使用 `127.0.0.1`，包括加密设备登录。未配置 `ip_source` 时可省略此项。S3 配置必须与 Tuwunel 当前使用的单一媒体后端及前缀一致，并支持对象版本、multipart、列举与删除指定版本。
 
 单聊可填 `peer.username`。群聊先用 `dialogs` 找到 `kind` 和 `id`；论坛群与广播频道当前不支持。每次连接都会重新解析本账号的 access hash，不从其它账号复制。
 

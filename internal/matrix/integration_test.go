@@ -27,7 +27,7 @@ func TestIsolatedTuwunelNativeMXCReadsDirectS3Object(t *testing.T) {
 		t.Skip("start isolated fixture and set TG_IMPORT_ISOLATED_TEST=1")
 	}
 	ctx := context.Background()
-	cfg := Config{URL: "http://127.0.0.1:19792", Server: "import.test", Bot: "@telegrambot:import.test", ASToken: "fixture-as-token", AdminToken: "fixture-as-token", AdminUser: "@owner:import.test", GhostPrefix: "telegram_", MediaPrefix: "media/"}
+	cfg := Config{URL: "http://127.0.0.1:19792", Server: "import.test", Bot: "@telegrambot:import.test", ASToken: "fixture-as-token", AdminToken: "fixture-as-token", AdminUser: "@owner:import.test", GhostPrefix: "telegram_", MediaPrefix: "media/", ClientIPHeader: "X-Real-IP"}
 	c, err := New(cfg, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestIsolatedEncryptedGhostMessageIsIdempotent(t *testing.T) {
 		t.Skip("requires isolated fixture")
 	}
 	ctx := context.Background()
-	c, err := New(Config{URL: "http://127.0.0.1:19792", Server: "import.test", Bot: "@telegrambot:import.test", ASToken: "fixture-as-token", GhostPrefix: "telegram_", MediaPrefix: "media/"}, t.TempDir())
+	c, err := New(Config{URL: "http://127.0.0.1:19792", Server: "import.test", Bot: "@telegrambot:import.test", ASToken: "fixture-as-token", GhostPrefix: "telegram_", MediaPrefix: "media/", ClientIPHeader: "X-Real-IP"}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +127,7 @@ func TestIsolatedEncryptedGhostMessageIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	reader.Client = c.HTTP
 	readerCrypto, err := cryptohelper.NewCryptoHelper(reader, []byte("fixture-only-encryption-key"), filepath.Join(t.TempDir(), "reader.db"))
 	if err != nil {
 		t.Fatal(err)
