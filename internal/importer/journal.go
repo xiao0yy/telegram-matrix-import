@@ -152,12 +152,9 @@ func (j *Journal) SavePayload(id int64, p json.RawMessage) error {
 	return e
 }
 func (j *Journal) Sent(id int64, event string) error {
-	if event == "" {
-		return errors.New("empty Matrix event ID")
-	}
-	_, e := j.db.Exec("UPDATE messages SET event_id=? WHERE id=?", event, id)
-	return e
+	return j.SentWithAttachmentLimit(id, event, 3)
 }
+
 func (j *Journal) Event(id int64) (string, error) {
 	var s string
 	e := j.db.QueryRow("SELECT event_id FROM messages WHERE id=?", id).Scan(&s)
@@ -175,29 +172,6 @@ func (j *Journal) QueueCleanup(id int64, m Media) error {
 	return e
 }
 
-// ReadyFileBefore finds a recently completed attachment for a bounded, read-only
-// source health probe. It never reads the attachment itself from Matrix or S3.
-func (j *Journal) ReadyFileBefore(id int64, matches func(*File) bool) (*Message, error) {
-	rows, err := j.db.Query("SELECT source FROM messages WHERE id<? AND json_extract(media,'$.state')='ready' ORDER BY id DESC LIMIT 128", id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
-			return nil, err
-		}
-		var m Message
-		if err := json.Unmarshal(raw, &m); err != nil {
-			return nil, err
-		}
-		if m.File != nil && matches(m.File) {
-			return &m, nil
-		}
-	}
-	return nil, rows.Err()
-}
 func (j *Journal) CleanupRecords(after int64) (map[int64]Media, error) {
 	rows, e := j.db.Query("SELECT id,media FROM cleanup WHERE id>? ORDER BY id LIMIT 32", after)
 	if e != nil {

@@ -1,5 +1,9 @@
 {
   "state": "/opt/telegram-import/state/example-conversation",
+  "attachments": {
+    "max_attempts": 5,
+    "max_consecutive_failures": 3
+  },
   "telegram": {
     "api_id": 0,
     "api_hash": "REPLACE",

@@ -37,8 +37,9 @@ var version = "dev"
 var commit = "unknown"
 
 type config struct {
-	State    string `json:"state"`
-	Telegram struct {
+	Attachments importer.AttachmentPolicy `json:"attachments"`
+	State       string                    `json:"state"`
+	Telegram    struct {
 		APIID               int         `json:"api_id"`
 		APIHash             string      `json:"api_hash"`
 		Peer                source.Peer `json:"peer"`
@@ -66,6 +67,9 @@ func load(path string) (config, error) {
 	d := json.NewDecoder(f)
 	d.DisallowUnknownFields()
 	if e = d.Decode(&c); e != nil {
+		return c, e
+	}
+	if c.Attachments, e = c.Attachments.Defaults(); e != nil {
 		return c, e
 	}
 	if !filepath.IsAbs(c.State) {
@@ -101,7 +105,7 @@ func run(ctx context.Context) error {
 	flags := flag.NewFlagSet("tg-import", flag.ContinueOnError)
 	flags.Usage = func() {
 		fmt.Fprintln(flags.Output(), "Usage: tg-import [-config config.json] <command>")
-		fmt.Fprintln(flags.Output(), "Commands: version, login, dialogs, inspect, create-room, run, catch-up, status, cleanup, handoff")
+		fmt.Fprintln(flags.Output(), "Commands: version, login, dialogs, inspect, create-room, run, catch-up, status, reset-attachment-failures, cleanup, handoff")
 		flags.PrintDefaults()
 	}
 	path := flags.String("config", "config.json", "private JSON configuration")
@@ -113,7 +117,7 @@ func run(ctx context.Context) error {
 	}
 	args := flags.Args()
 	if len(args) != 1 {
-		return errors.New("usage: tg-import -config config.json login|dialogs|inspect|create-room|run|catch-up|status|cleanup|handoff")
+		return errors.New("usage: tg-import -config config.json login|dialogs|inspect|create-room|run|catch-up|status|reset-attachment-failures|cleanup|handoff")
 	}
 	cmd := args[0]
 	if cmd == "version" {
@@ -147,7 +151,20 @@ func run(ctx context.Context) error {
 		} else if raw != "" {
 			s["execution"] = json.RawMessage(raw)
 		}
+		failures, err := j.AttachmentFailures()
+		if err != nil {
+			return err
+		}
+		s["attachment_failures"] = failures
+		s["attachment_policy"] = c.Attachments
 		emit(s)
+		return nil
+	}
+	if cmd == "reset-attachment-failures" {
+		if e = j.ResetAttachmentFailures(); e != nil {
+			return e
+		}
+		emit(map[string]string{"next": "resume the original run or catch-up command with the bridge stopped; existing failed messages are unchanged"})
 		return nil
 	}
 	// Keep the exclusive journal lock while waiting. Each attempt reopens the
@@ -221,7 +238,7 @@ func execute(ctx context.Context, c config, j *importer.Journal, cmd string) err
 	identityRaw, _ := json.Marshal([]any{c.Telegram.APIID, c.Telegram.Peer.Kind, c.Telegram.Peer.ID, c.Bridge.LoginID, c.Matrix.Server, mx.Room, c.Matrix.GhostPrefix, c.S3.Endpoint, c.S3.Bucket, c.Matrix.MediaPrefix})
 	identityHash := sha256.Sum256(identityRaw)
 	identity := hex.EncodeToString(identityHash[:])
-	engine := &importer.Engine{Journal: j, Matrix: mx, Objects: &c.S3, Identity: identity, Attempts: 5, RetryDelay: 5 * time.Second, Progress: func(progress map[string]any) { emit(progress) }, BeforeMessage: c.Bridge.Stopped}
+	engine := &importer.Engine{Journal: j, Matrix: mx, Objects: &c.S3, Identity: identity, Attempts: c.Attachments.MaxAttempts, ConsecutiveFailureLimit: c.Attachments.MaxConsecutiveFailures, RetryDelay: 5 * time.Second, Progress: func(progress map[string]any) { emit(progress) }, BeforeMessage: c.Bridge.Stopped}
 	if cmd == "cleanup" {
 		if e = j.Bind(identity); e != nil {
 			return e
@@ -313,7 +330,7 @@ func execute(ctx context.Context, c config, j *importer.Journal, cmd string) err
 		if err != nil {
 			return err
 		}
-		src := &source.Source{Client: client, Peer: peer, SelfID: self.ID, Report: requestEvent, Journal: j}
+		src := &source.Source{Client: client, Peer: peer, SelfID: self.ID, Report: requestEvent}
 		if cmd == "inspect" {
 			latest, err := src.Latest(ctx)
 			if err != nil {
@@ -374,6 +391,10 @@ func (e *temporaryFailure) RetryAfter() time.Duration { return e.delay }
 
 func classifyFailure(err error) error {
 	if err == nil || errors.Is(err, context.Canceled) {
+		return err
+	}
+	var explicit interface{ Retryable() bool }
+	if errors.As(err, &explicit) && !explicit.Retryable() {
 		return err
 	}
 	if rpc, ok := tgerr.As(err); ok && rpc.Code >= 500 && rpc.Code <= 599 {

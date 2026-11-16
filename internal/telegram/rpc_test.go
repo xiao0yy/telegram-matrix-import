@@ -61,30 +61,27 @@ func TestServerTimeoutAlsoEscapesSDKRetryLoop(t *testing.T) {
 	}
 }
 
-func TestDownloadTimeoutNeedsHealthyStorageProbeBeforeSkipping(t *testing.T) {
+func TestDownloadFailuresUseFileBudgetExceptAccountAndRateLimits(t *testing.T) {
 	for _, test := range []struct {
-		name                      string
-		err                       error
-		healthy                   bool
-		wantProbe, wantAttachment bool
+		name       string
+		err        error
+		attachment bool
 	}{
-		{"isolated file", &requestTimeoutError{Request: "*tg.UploadGetFileRequest", Server: true, Cause: &tgerr.Error{Code: 500, Type: tg.ErrTimeout}}, true, true, true},
-		{"DC outage", &requestTimeoutError{Request: "*tg.UploadGetFileRequest", Server: true, Cause: &tgerr.Error{Code: 500, Type: tg.ErrTimeout}}, false, true, false},
-		{"network outage", &requestTimeoutError{Request: "*tg.UploadGetFileRequest", Cause: context.DeadlineExceeded}, true, false, false},
-		{"authorization", &tgerr.Error{Code: 401, Type: "AUTH_KEY_UNREGISTERED"}, true, false, false},
+		{"server timeout", &requestTimeoutError{Request: "*tg.UploadGetFileRequest", Server: true, Cause: &tgerr.Error{Code: 500, Type: tg.ErrTimeout}}, true},
+		{"network timeout", &requestTimeoutError{Request: "*tg.UploadGetFileRequest", Cause: context.DeadlineExceeded}, true},
+		{"server outage", &tgerr.Error{Code: 500, Type: "INTERNAL"}, true},
+		{"file missing", &tgerr.Error{Code: 400, Type: "FILE_ID_INVALID"}, true},
+		{"authorization", &tgerr.Error{Code: 401, Type: "AUTH_KEY_UNREGISTERED"}, false},
+		{"permission", &tgerr.Error{Code: 403, Type: "CHAT_ADMIN_REQUIRED"}, false},
+		{"session", &tgerr.Error{Code: 406, Type: "AUTH_KEY_DUPLICATED"}, false},
+		{"flood wait", &tgerr.Error{Code: 420, Type: "FLOOD_WAIT", Argument: 60}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			probed := false
-			err := downloadFailure(test.err, func() error {
-				probed = true
-				if test.healthy {
-					return nil
-				}
-				return context.DeadlineExceeded
-			})
+			err := downloadFailure(test.err)
 			var attachment *importer.AttachmentError
-			if probed != test.wantProbe || errors.As(err, &attachment) != test.wantAttachment {
-				t.Fatalf("wrong classification: %v probe=%v", err, probed)
+			var unavailable *importer.SourceUnavailable
+			if errors.As(err, &attachment) != test.attachment || errors.As(err, &unavailable) == test.attachment || !errors.Is(err, test.err) {
+				t.Fatalf("wrong classification: %v", err)
 			}
 		})
 	}

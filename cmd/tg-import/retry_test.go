@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gotd/td/tgerr"
+	"github.com/xiao0yy/telegram-matrix-import/internal/importer"
 	"github.com/xiao0yy/telegram-matrix-import/internal/matrix"
 	"github.com/xiao0yy/telegram-matrix-import/internal/retry"
 	"github.com/xiao0yy/telegram-matrix-import/internal/s3"
@@ -29,6 +30,7 @@ func TestTransientAndPermanentCommandErrors(t *testing.T) {
 		{&tgerr.Error{Code: 401, Type: "AUTH_KEY_UNREGISTERED"}, false},
 		{fmt.Errorf("wrapped: %w", context.DeadlineExceeded), true},
 		{errors.New("bridge must remain stopped"), false},
+		{&importer.AttachmentLimitError{Failures: importer.AttachmentFailures{Consecutive: 3, Limit: 3, Blocked: true}}, false},
 	} {
 		if got := retry.Temporary(classifyFailure(test.err)); got != test.want {
 			t.Errorf("%T: got %v, want %v", test.err, got, test.want)

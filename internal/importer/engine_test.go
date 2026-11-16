@@ -309,7 +309,7 @@ func TestDownloadTimeoutPreservesCheckpointAndPausesWithoutPlaceholder(t *testin
 	if err = e.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(s.offsets) != "[0 8388608 8388608 8388608]" || fmt.Sprint(m.order) != "[1 4 9]" || len(o.data["key"]) != len(s.data) {
+	if fmt.Sprint(s.offsets) != "[0 8388608]" || fmt.Sprint(m.order) != "[1 4 9]" || len(o.data["key"]) != len(s.data) {
 		t.Fatalf("resume did not reuse checkpoint in order: offsets=%v order=%v", s.offsets, m.order)
 	}
 }

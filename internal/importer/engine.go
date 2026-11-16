@@ -14,24 +14,27 @@ import (
 )
 
 type Engine struct {
-	Journal       *Journal
-	Source        Source
-	Matrix        Matrix
-	Objects       Objects
-	Identity      string
-	Attempts      int
-	PartSize      int
-	RetryDelay    time.Duration
-	Progress      func(map[string]any)
-	BeforeMessage func(context.Context) error
-	current       *Record
-	through       int64
+	Journal                 *Journal
+	Source                  Source
+	Matrix                  Matrix
+	Objects                 Objects
+	Identity                string
+	Attempts                int
+	ConsecutiveFailureLimit int
+	PartSize                int
+	RetryDelay              time.Duration
+	Progress                func(map[string]any)
+	BeforeMessage           func(context.Context) error
+	current                 *Record
+	through                 int64
 }
 
 func (e *Engine) Run(ctx context.Context) error {
-	if e.Attempts < 1 {
-		e.Attempts = 5
+	policy, err := (AttachmentPolicy{e.Attempts, e.ConsecutiveFailureLimit}).Defaults()
+	if err != nil {
+		return err
 	}
+	e.Attempts, e.ConsecutiveFailureLimit = policy.MaxAttempts, policy.MaxConsecutiveFailures
 	if e.PartSize == 0 {
 		e.PartSize = 8 << 20
 	}
@@ -62,6 +65,9 @@ func (e *Engine) Run(ctx context.Context) error {
 	e.through = through
 	for {
 		if err = ctx.Err(); err != nil {
+			return err
+		}
+		if _, err = e.Journal.CheckAttachmentFailures(e.ConsecutiveFailureLimit); err != nil {
 			return err
 		}
 		record, err := e.Journal.Next()
@@ -139,10 +145,12 @@ func (e *Engine) deliver(ctx context.Context, r *Record) error {
 	if len(r.Payload) == 0 {
 		if r.Message.File != nil && r.Media.State != "ready" && r.Media.State != "failed" {
 			var lastError error
-			if r.Media.ErrorKind == "storage" && r.Media.Attempts >= e.Attempts {
+			// Older journals counted infrastructure failures in Attempts as well.
+			if r.Media.ErrorKind == "storage" {
 				r.Media.Attempts = 0
 			}
-			for r.Media.Attempts < e.Attempts {
+			infrastructureAttempts := 0
+			for r.Media.Attempts < e.Attempts && infrastructureAttempts < e.Attempts {
 				err := e.transfer(ctx, r)
 				if err == nil {
 					break
@@ -150,19 +158,26 @@ func (e *Engine) deliver(ctx context.Context, r *Record) error {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				r.Media.Attempts++
 				lastError = err
 				r.Media.Error = err.Error()
 				var attachmentErr *AttachmentError
-				r.Media.ErrorKind = "storage"
+				r.Media.ErrorKind = "infrastructure"
 				if errors.As(err, &attachmentErr) {
+					r.Media.Attempts++
 					r.Media.ErrorKind = "attachment"
+				} else {
+					infrastructureAttempts++
 				}
 				if saveErr := e.Journal.SaveMedia(r.Message.ID, r.Media); saveErr != nil {
 					return saveErr
 				}
 				e.report()
-				if r.Media.Attempts < e.Attempts {
+				var unavailable *SourceUnavailable
+				var retryable interface{ Retryable() bool }
+				if r.Media.ErrorKind != "attachment" && (errors.As(err, &unavailable) || errors.As(err, &retryable) && !retryable.Retryable()) {
+					return err
+				}
+				if r.Media.Attempts < e.Attempts && infrastructureAttempts < e.Attempts {
 					timer := time.NewTimer(e.RetryDelay)
 					select {
 					case <-ctx.Done():
@@ -240,7 +255,7 @@ func (e *Engine) deliver(ctx context.Context, r *Record) error {
 	if err != nil {
 		return err
 	}
-	return e.Journal.Sent(r.Message.ID, event)
+	return e.Journal.SentWithAttachmentLimit(r.Message.ID, event, e.ConsecutiveFailureLimit)
 }
 
 func (e *Engine) Cleanup(ctx context.Context) error {
