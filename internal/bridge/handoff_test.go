@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xiao0yy/telegram-matrix-import/internal/importer"
@@ -22,8 +23,10 @@ func TestHandoffWithRealBridgeSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin)
-	for _, kind := range []string{"user", "chat", "channel"} {
+	for _, kind := range []string{"user", "chat", "channel", "cached-user", "cached-chat", "cached-channel"} {
 		t.Run(kind, func(t *testing.T) {
+			cached := strings.HasPrefix(kind, "cached-")
+			kind = strings.TrimPrefix(kind, "cached-")
 			dir := t.TempDir()
 			path := filepath.Join(dir, "bridge.db")
 			raw, err := dbutil.NewWithDialect(path, "sqlite3")
@@ -59,9 +62,6 @@ func TestHandoffWithRealBridgeSchema(t *testing.T) {
 			apply := func(room string) error {
 				return cfg.Apply(ctx, journal, kind, 456, "test", room, "test", "telegram_", filepath.Join(dir, "backups"))
 			}
-			if err = apply("!room:test"); err != nil {
-				t.Fatal(err)
-			}
 			receiver := networkid.UserLoginID("123")
 			msgID := networkid.MessageID("20")
 			if kind == "channel" {
@@ -69,6 +69,15 @@ func TestHandoffWithRealBridgeSchema(t *testing.T) {
 				msgID = "456.20"
 			}
 			key := networkid.PortalKey{ID: networkid.PortalID(kind + ":456"), Receiver: receiver}
+			if cached {
+				if err = db.Portal.Insert(ctx, &database.Portal{PortalKey: key, Metadata: map[string]any{"preserved": "dialog-cache"}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if err = apply("!room:test"); err != nil {
+				t.Fatal(err)
+			}
 			portal, err := db.Portal.GetByKey(ctx, key)
 			if err != nil || portal == nil {
 				t.Fatal(portal, err)
@@ -76,6 +85,13 @@ func TestHandoffWithRealBridgeSchema(t *testing.T) {
 			if portal.MXID != "!room:test" {
 				t.Fatal(portal.MXID)
 			}
+			if cached {
+				var metadata string
+				if err = db.QueryRow(ctx, "SELECT metadata FROM portal WHERE id=? AND receiver=?", key.ID, key.Receiver).Scan(&metadata); err != nil || metadata != `{"preserved":"dialog-cache"}` {
+					t.Fatal("cached metadata changed", metadata, err)
+				}
+			}
+
 			if kind == "user" && (portal.RoomType != database.RoomTypeDM || portal.OtherUserID != "456") {
 				t.Fatal("DM mapping missing", portal.RoomType, portal.OtherUserID)
 			}
@@ -108,6 +124,13 @@ func TestHandoffWithRealBridgeSchema(t *testing.T) {
 			if err = apply("!different:test"); err == nil {
 				t.Fatal("accepted a conflicting room")
 			}
+			if _, err = db.Exec(ctx, "UPDATE portal SET mxid=NULL"); err != nil {
+				t.Fatal(err)
+			}
+			if err = apply("!room:test"); err == nil {
+				t.Fatal("accepted an unmapped portal with existing messages")
+			}
+
 		})
 	}
 }

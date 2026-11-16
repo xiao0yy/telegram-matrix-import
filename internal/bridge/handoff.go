@@ -125,7 +125,15 @@ func (c Config) Apply(ctx context.Context, j *importer.Journal, kind string, pee
 		return errors.New("portal already belongs to another Matrix room")
 	}
 	if e == nil && (!existing.Valid || existing.String == "") {
-		return errors.New("an unmapped portal already exists; review it before handoff")
+		// The bridge caches Telegram dialogs before creating Matrix rooms.
+		// Reuse an empty cache entry, but never adopt an orphaned history.
+		var count int
+		if e = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM message WHERE bridge_id=? AND room_id=? AND room_receiver=?", c.BridgeID, portal, receiver).Scan(&count); e != nil {
+			return e
+		}
+		if count != 0 {
+			return errors.New("unmapped portal still has message history; review it before handoff")
+		}
 	}
 	roomType, otherUser := "", ""
 	if kind == "user" {
@@ -134,6 +142,11 @@ func (c Config) Apply(ctx context.Context, j *importer.Journal, kind string, pee
 	metadata, _ := json.Marshal(map[string]any{"is_supergroup": kind == "channel", "allowed_reactions": []string{}})
 	if _, e = tx.ExecContext(ctx, `INSERT INTO portal(bridge_id,id,receiver,mxid,name,topic,avatar_id,avatar_hash,avatar_mxc,name_set,avatar_set,topic_set,in_space,room_type,other_user_id,metadata)
  VALUES(?,?,?,?,?,'','','','',true,false,false,false,?,?,?) ON CONFLICT(bridge_id,id,receiver) DO NOTHING`, c.BridgeID, portal, receiver, room, title, roomType, otherUser, string(metadata)); e != nil {
+		return e
+	}
+	// Keep cached Telegram metadata and identifiers. Only bind the previously
+	// unmapped dialog to the imported room; the bridge will refresh its profile.
+	if _, e = tx.ExecContext(ctx, `UPDATE portal SET mxid=?, name=?, name_set=true, avatar_set=false, topic_set=false, in_space=false, room_type=?, other_user_id=? WHERE bridge_id=? AND id=? AND receiver=? AND (mxid IS NULL OR mxid='')`, room, title, roomType, otherUser, c.BridgeID, portal, receiver); e != nil {
 		return e
 	}
 	e = j.Each(func(r importer.Record) error {
