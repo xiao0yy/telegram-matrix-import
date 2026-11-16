@@ -138,6 +138,7 @@ func (e *Engine) transaction(id int64) string {
 func (e *Engine) deliver(ctx context.Context, r *Record) error {
 	if len(r.Payload) == 0 {
 		if r.Message.File != nil && r.Media.State != "ready" && r.Media.State != "failed" {
+			var lastError error
 			if r.Media.ErrorKind == "storage" && r.Media.Attempts >= e.Attempts {
 				r.Media.Attempts = 0
 			}
@@ -150,6 +151,7 @@ func (e *Engine) deliver(ctx context.Context, r *Record) error {
 					return ctx.Err()
 				}
 				r.Media.Attempts++
+				lastError = err
 				r.Media.Error = err.Error()
 				var attachmentErr *AttachmentError
 				r.Media.ErrorKind = "storage"
@@ -172,7 +174,7 @@ func (e *Engine) deliver(ctx context.Context, r *Record) error {
 			}
 			if r.Media.State != "ready" {
 				if r.Media.ErrorKind != "attachment" {
-					return fmt.Errorf("media infrastructure failed; import paused at this message: %s", r.Media.Error)
+					return fmt.Errorf("media infrastructure failed; checkpoint retained: %w", lastError)
 				}
 				// Register cleanup before committing the failed timeline entry. A crash
 				// between these writes can only leave a managed cleanup job.

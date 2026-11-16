@@ -14,6 +14,21 @@ import (
 
 const requestTimeout = 2 * time.Minute
 
+type requestTimeoutError struct {
+	Request string
+	Server  bool
+	Cause   error
+}
+
+func (e *requestTimeoutError) Error() string {
+	if e.Server {
+		return "Telegram " + e.Request + " returned TIMEOUT"
+	}
+	return "Telegram " + e.Request + " request timed out: " + e.Cause.Error()
+}
+func (e *requestTimeoutError) Unwrap() error   { return e.Cause }
+func (e *requestTimeoutError) Retryable() bool { return true }
+
 // WithRequestPolicy also wraps download pools: those invokers bypass the
 // primary client's middleware. Limit each RPC, not the complete attachment,
 // so a large file can make progress for as long as it needs.
@@ -72,8 +87,16 @@ func (p *requestInvoker) Invoke(ctx context.Context, in bin.Encoder, out bin.Dec
 		}
 		var netErr net.Error
 		if timedOut || errors.Is(err, context.DeadlineExceeded) || tgerr.Is(err, tg.ErrTimeout) || (errors.As(err, &netErr) && netErr.Timeout()) {
-			p.event("timeout", in, p.timeout)
-			failure := fmt.Errorf("Telegram %T request timed out (limit %s): %w", in, p.timeout, context.DeadlineExceeded)
+			server := tgerr.Is(err, tg.ErrTimeout)
+			state := "timeout"
+			cause := err
+			if server {
+				state = "server_timeout"
+			} else if timedOut || cause == nil {
+				cause = context.DeadlineExceeded
+			}
+			p.event(state, in, p.timeout)
+			failure := &requestTimeoutError{Request: fmt.Sprintf("%T", in), Server: server, Cause: cause}
 			if p.onTimeout != nil {
 				p.onTimeout(failure)
 			}

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/xiao0yy/telegram-matrix-import/internal/importer"
+	"github.com/xiao0yy/telegram-matrix-import/internal/retry"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/crypto/cryptohelper"
 	"maunium.net/go/mautrix/event"
@@ -50,7 +51,11 @@ type APIError struct {
 	Status  int
 	Code    string
 	Message string
+	Delay   time.Duration
 }
+
+func (e *APIError) Retryable() bool           { return retry.HTTPStatus(e.Status) }
+func (e *APIError) RetryAfter() time.Duration { return e.Delay }
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("Matrix HTTP %d (%s): %s", e.Status, e.Code, e.Message)
@@ -90,8 +95,9 @@ func (c *Client) request(ctx context.Context, method, path, user string, body []
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		var x struct {
-			Code    string `json:"errcode"`
-			Message string `json:"error"`
+			Code         string `json:"errcode"`
+			Message      string `json:"error"`
+			RetryAfterMS int64  `json:"retry_after_ms"`
 		}
 		_ = json.Unmarshal(b, &x)
 		if x.Message == "" {
@@ -105,7 +111,11 @@ func (c *Client) request(ctx context.Context, method, path, user string, body []
 		if len(x.Message) > 1000 {
 			x.Message = x.Message[:1000]
 		}
-		return nil, res.Header, &APIError{res.StatusCode, x.Code, x.Message}
+		delay := retry.RetryAfter(res.Header.Get("Retry-After"))
+		if x.RetryAfterMS > 0 && x.RetryAfterMS <= int64((1<<63-1)/time.Millisecond) {
+			delay = max(delay, time.Duration(x.RetryAfterMS)*time.Millisecond)
+		}
+		return nil, res.Header, &APIError{Status: res.StatusCode, Code: x.Code, Message: x.Message, Delay: delay}
 	}
 	return b, res.Header, nil
 }

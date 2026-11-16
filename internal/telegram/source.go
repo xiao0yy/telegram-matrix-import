@@ -42,11 +42,12 @@ func (p Peer) Input() (tg.InputPeerClass, error) {
 }
 
 type Source struct {
-	Client *telegram.Client
-	Peer   Peer
-	SelfID int64
-	API    *tg.Client
-	Report func(map[string]any)
+	Client  *telegram.Client
+	Peer    Peer
+	SelfID  int64
+	API     *tg.Client
+	Report  func(map[string]any)
+	Journal *importer.Journal
 }
 
 func (s *Source) api() *tg.Client {
@@ -334,5 +335,70 @@ func (s *Source) Download(ctx context.Context, m importer.Message, offset int64,
 	if e == nil || errors.Is(e, fileref.ErrNotFound) || tgerr.Is(e, "FILE_REFERENCE_EXPIRED", "FILE_REFERENCE_INVALID", "LOCATION_INVALID", "FILE_ID_INVALID", "MEDIA_EMPTY", "DOCUMENT_INVALID") {
 		return e
 	}
-	return &importer.SourceUnavailable{Err: e}
+	return downloadFailure(e, func() error { return s.probeDownload(ctx, m, l) })
+}
+
+// A server TIMEOUT can describe one broken Telegram file or an unavailable
+// storage DC. Only treat it as a file failure when a different, previously
+// completed file on the same DC and of the same kind is still downloadable.
+func downloadFailure(err error, probe func() error) error {
+	var timeout *requestTimeoutError
+	if errors.As(err, &timeout) && timeout.Server && timeout.Request == "*tg.UploadGetFileRequest" {
+		if probe() == nil {
+			return &importer.AttachmentError{Err: err}
+		}
+	}
+	return &importer.SourceUnavailable{Err: err}
+}
+
+func (s *Source) probeDownload(ctx context.Context, failed importer.Message, storage location) error {
+	if s.Journal == nil {
+		return errors.New("no completed attachment available for source health probe")
+	}
+	known, err := s.Journal.ReadyFileBefore(failed.ID, func(f *importer.File) bool {
+		var l location
+		return f.ID != failed.File.ID && json.Unmarshal(f.Location, &l) == nil && l.DC == storage.DC && l.Kind == storage.Kind
+	})
+	if err != nil {
+		return err
+	}
+	if known == nil {
+		return errors.New("no completed attachment on the affected Telegram storage DC")
+	}
+	// Refresh only this file's reference. Never substitute a new/edited file.
+	page, err := s.Page(ctx, known.ID-1, known.ID, 1)
+	if err != nil {
+		return err
+	}
+	if len(page) != 1 || page[0].ID != known.ID || page[0].File == nil || page[0].File.ID != known.File.ID {
+		return errors.New("source health probe file is no longer available")
+	}
+	var l location
+	if err = json.Unmarshal(page[0].File.Location, &l); err != nil {
+		return err
+	}
+	if l.DC != storage.DC || l.Kind != storage.Kind {
+		return errors.New("source health probe changed storage location")
+	}
+	connect, cancel := context.WithTimeout(ctx, requestTimeout)
+	pool, err := s.Client.DC(connect, l.DC, 1)
+	cancel()
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	// Four KiB is enough to establish that this download path works; no full
+	// attachment is downloaded, uploaded, stored or inserted into the timeline.
+	file, err := tg.NewClient(WithRequestPolicy(pool, s.Report)).UploadGetFile(ctx, &tg.UploadGetFileRequest{Location: l.Input(), Limit: 4096})
+	if err != nil {
+		return err
+	}
+	data, ok := file.(*tg.UploadFile)
+	if !ok || len(data.Bytes) == 0 {
+		return errors.New("source health probe returned no file bytes")
+	}
+	if s.Report != nil {
+		s.Report(map[string]any{"event": "telegram_download_probe", "state": "healthy", "message_id": failed.ID, "bytes": len(data.Bytes)})
+	}
+	return nil
 }

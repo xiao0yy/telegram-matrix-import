@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/xiao0yy/telegram-matrix-import/internal/importer"
+	"github.com/xiao0yy/telegram-matrix-import/internal/retry"
 )
 
 type Client struct {
@@ -34,11 +35,16 @@ type Client struct {
 type Error struct {
 	Status int
 	Code   string
+	Delay  time.Duration
 }
 
-func (e *Error) Error() string { return fmt.Sprintf("S3 HTTP %d (%s)", e.Status, e.Code) }
-func absent(err error) bool    { var e *Error; return errors.As(err, &e) && e.Status == 404 }
-func digest(b []byte) string   { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
+func (e *Error) Error() string             { return fmt.Sprintf("S3 HTTP %d (%s)", e.Status, e.Code) }
+func (e *Error) RetryAfter() time.Duration { return e.Delay }
+func (e *Error) Retryable() bool {
+	return retry.HTTPStatus(e.Status) || e.Code == "RequestTimeout" || e.Code == "SlowDown" || e.Code == "InternalError" || e.Code == "ServiceUnavailable"
+}
+func absent(err error) bool  { var e *Error; return errors.As(err, &e) && e.Status == 404 }
+func digest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 func mac(k []byte, s string) []byte {
 	h := hmac.New(sha256.New, k)
 	h.Write([]byte(s))
@@ -108,7 +114,7 @@ func (c *Client) request(ctx context.Context, method, key string, q url.Values, 
 	}
 	_ = xml.Unmarshal(b, &apiError)
 	if res.StatusCode < 200 || res.StatusCode >= 300 || apiError.XMLName.Local == "Error" {
-		return nil, nil, &Error{res.StatusCode, apiError.Code}
+		return nil, nil, &Error{Status: res.StatusCode, Code: apiError.Code, Delay: retry.RetryAfter(res.Header.Get("Retry-After"))}
 	}
 	return b, res.Header, nil
 }

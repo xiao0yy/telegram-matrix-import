@@ -11,6 +11,7 @@ import (
 	tgclient "github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
+	"github.com/xiao0yy/telegram-matrix-import/internal/importer"
 )
 
 type invokeFunc func(context.Context, bin.Encoder, bin.Decoder) error
@@ -55,8 +56,37 @@ func TestServerTimeoutAlsoEscapesSDKRetryLoop(t *testing.T) {
 	client := &tgclient.Client{}
 	_, err := client.DownloadVia(rpc, &tg.InputDocumentFileLocation{}).
 		WithSize(1<<20).WithThreads(1).Stream(downloadCtx, io.Discard)
-	if err == nil || ctx.Err() != nil || calls != 1 || !errors.Is(context.Cause(downloadCtx), context.DeadlineExceeded) {
+	if err == nil || ctx.Err() != nil || calls != 1 || !tgerr.Is(context.Cause(downloadCtx), tg.ErrTimeout) {
 		t.Fatalf("server timeout stayed in SDK retry loop: %v calls=%d", err, calls)
+	}
+}
+
+func TestDownloadTimeoutNeedsHealthyStorageProbeBeforeSkipping(t *testing.T) {
+	for _, test := range []struct {
+		name                      string
+		err                       error
+		healthy                   bool
+		wantProbe, wantAttachment bool
+	}{
+		{"isolated file", &requestTimeoutError{Request: "*tg.UploadGetFileRequest", Server: true, Cause: &tgerr.Error{Code: 500, Type: tg.ErrTimeout}}, true, true, true},
+		{"DC outage", &requestTimeoutError{Request: "*tg.UploadGetFileRequest", Server: true, Cause: &tgerr.Error{Code: 500, Type: tg.ErrTimeout}}, false, true, false},
+		{"network outage", &requestTimeoutError{Request: "*tg.UploadGetFileRequest", Cause: context.DeadlineExceeded}, true, false, false},
+		{"authorization", &tgerr.Error{Code: 401, Type: "AUTH_KEY_UNREGISTERED"}, true, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			probed := false
+			err := downloadFailure(test.err, func() error {
+				probed = true
+				if test.healthy {
+					return nil
+				}
+				return context.DeadlineExceeded
+			})
+			var attachment *importer.AttachmentError
+			if probed != test.wantProbe || errors.As(err, &attachment) != test.wantAttachment {
+				t.Fatalf("wrong classification: %v probe=%v", err, probed)
+			}
+		})
 	}
 }
 

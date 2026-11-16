@@ -22,12 +22,15 @@ import (
 	tgclient "github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 	"github.com/xiao0yy/telegram-matrix-import/internal/bridge"
 	"github.com/xiao0yy/telegram-matrix-import/internal/importer"
 	"github.com/xiao0yy/telegram-matrix-import/internal/matrix"
+	"github.com/xiao0yy/telegram-matrix-import/internal/retry"
 	"github.com/xiao0yy/telegram-matrix-import/internal/s3"
 	source "github.com/xiao0yy/telegram-matrix-import/internal/telegram"
 	"golang.org/x/term"
+	"maunium.net/go/mautrix"
 )
 
 var version = "dev"
@@ -88,6 +91,9 @@ func main() {
 	defer stop()
 	if e := run(ctx); e != nil {
 		fmt.Fprintln(os.Stderr, e)
+		if retry.Temporary(classifyFailure(e)) {
+			os.Exit(75)
+		}
 		os.Exit(1)
 	}
 }
@@ -136,9 +142,37 @@ func run(ctx context.Context) error {
 		boundary, _ := j.Get("boundary")
 		s["phase"] = phase
 		s["through_telegram_id"] = boundary
+		if raw, err := j.Get("execution"); err != nil {
+			return err
+		} else if raw != "" {
+			s["execution"] = json.RawMessage(raw)
+		}
 		emit(s)
 		return nil
 	}
+	// Keep the exclusive journal lock while waiting. Each attempt reopens the
+	// Matrix/Telegram clients but reuses the same journal and event transactions.
+	if cmd == "run" || cmd == "catch-up" || cmd == "cleanup" || cmd == "handoff" {
+		policy := retry.Policy{Report: func(status retry.Status) error {
+			raw, err := json.Marshal(struct {
+				Command string `json:"command"`
+				retry.Status
+			}{cmd, status})
+			if err != nil {
+				return err
+			}
+			if err = j.Set("execution", string(raw)); err != nil {
+				return err
+			}
+			requestEvent(map[string]any{"event": "import_execution", "execution": json.RawMessage(raw)})
+			return nil
+		}}
+		return policy.Run(ctx, func(ctx context.Context) error { return classifyFailure(execute(ctx, c, j, cmd)) })
+	}
+	return execute(ctx, c, j, cmd)
+}
+
+func execute(ctx context.Context, c config, j *importer.Journal, cmd string) error {
 	if saved, err := j.Get("peer"); err != nil {
 		return err
 	} else if saved != "" {
@@ -279,7 +313,7 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		src := &source.Source{Client: client, Peer: peer, SelfID: self.ID, Report: requestEvent}
+		src := &source.Source{Client: client, Peer: peer, SelfID: self.ID, Report: requestEvent, Journal: j}
 		if cmd == "inspect" {
 			latest, err := src.Latest(ctx)
 			if err != nil {
@@ -326,6 +360,33 @@ func run(ctx context.Context) error {
 		}
 		return engine.Run(ctx)
 	})
+}
+
+type temporaryFailure struct {
+	err   error
+	delay time.Duration
+}
+
+func (e *temporaryFailure) Error() string             { return e.err.Error() }
+func (e *temporaryFailure) Unwrap() error             { return e.err }
+func (e *temporaryFailure) Retryable() bool           { return true }
+func (e *temporaryFailure) RetryAfter() time.Duration { return e.delay }
+
+func classifyFailure(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return err
+	}
+	if rpc, ok := tgerr.As(err); ok && rpc.Code >= 500 && rpc.Code <= 599 {
+		return &temporaryFailure{err: err}
+	}
+	if delay, ok := tgerr.AsFloodWait(err); ok {
+		return &temporaryFailure{err: err, delay: delay + time.Second}
+	}
+	var httpErr mautrix.HTTPError
+	if errors.As(err, &httpErr) && httpErr.Response != nil && retry.HTTPStatus(httpErr.Response.StatusCode) {
+		return &temporaryFailure{err: err, delay: retry.RetryAfter(httpErr.Response.Header.Get("Retry-After"))}
+	}
+	return err
 }
 
 type terminalAuth struct{}

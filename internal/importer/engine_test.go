@@ -14,6 +14,9 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
+
+	"github.com/xiao0yy/telegram-matrix-import/internal/retry"
 )
 
 type source struct {
@@ -22,6 +25,34 @@ type source struct {
 	offsets  []int64
 	cancel   context.CancelFunc
 	fail     bool
+}
+
+// Exercise the real durable engine in the automatic runner: nobody invokes
+// Run a second time after the outage and the same journal remains locked.
+func TestAutomaticResumeKeepsConfirmedPartsAndTimeline(t *testing.T) {
+	e, path, s, m, o := fixture(t)
+	defer e.Journal.Close()
+	e.Source = &timedOutSource{source: s}
+	waits := 0
+	p := retry.Policy{Wait: func(context.Context, time.Duration) error {
+		waits++
+		r, err := e.Journal.Next()
+		if err != nil || r.Media.Offset != 8<<20 || r.Media.State == "failed" || len(r.Payload) != 0 {
+			t.Fatalf("checkpoint lost during wait: %v", err)
+		}
+		if other, err := Open(path); err == nil {
+			other.Close()
+			t.Fatal("retry released the journal lock")
+		}
+		e.Source = s
+		return nil
+	}}
+	if err := p.Run(context.Background(), e.Run); err != nil {
+		t.Fatal(err)
+	}
+	if waits != 1 || fmt.Sprint(m.order) != "[1 4 9]" || len(o.data["key"]) != len(s.data) {
+		t.Fatalf("incorrect automatic resume: waits=%d order=%v", waits, m.order)
+	}
 }
 
 func (s *source) Latest(context.Context) (int64, error) { return s.messages[len(s.messages)-1].ID, nil }
