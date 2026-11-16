@@ -75,6 +75,7 @@ func (e *Engine) Run(ctx context.Context) error {
 					return err
 				}
 			}
+			e.report()
 			if err = e.deliver(ctx, record); err != nil {
 				return fmt.Errorf("message %d: %w", record.Message.ID, err)
 			}
@@ -127,7 +128,7 @@ func (e *Engine) Run(ctx context.Context) error {
 
 func (e *Engine) report() {
 	if e.Progress != nil && e.current != nil {
-		e.Progress(map[string]any{"message_id": e.current.Message.ID, "through_telegram_id": e.through, "attachment_bytes_uploaded": e.current.Media.Offset, "attachment_state": e.current.Media.State})
+		e.Progress(map[string]any{"at": time.Now().UTC().Format(time.RFC3339Nano), "message_id": e.current.Message.ID, "through_telegram_id": e.through, "attachment_bytes_uploaded": e.current.Media.Offset, "attachment_state": e.current.Media.State, "attachment_attempts": e.current.Media.Attempts, "attachment_error_kind": e.current.Media.ErrorKind})
 	}
 }
 func (e *Engine) transaction(id int64) string {
@@ -158,6 +159,7 @@ func (e *Engine) deliver(ctx context.Context, r *Record) error {
 				if saveErr := e.Journal.SaveMedia(r.Message.ID, r.Media); saveErr != nil {
 					return saveErr
 				}
+				e.report()
 				if r.Media.Attempts < e.Attempts {
 					timer := time.NewTimer(e.RetryDelay)
 					select {

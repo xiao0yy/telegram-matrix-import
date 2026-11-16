@@ -18,12 +18,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gotd/td/bin"
 	"github.com/gotd/td/session"
 	tgclient "github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
-	"github.com/gotd/td/tgerr"
 	"github.com/xiao0yy/telegram-matrix-import/internal/bridge"
 	"github.com/xiao0yy/telegram-matrix-import/internal/importer"
 	"github.com/xiao0yy/telegram-matrix-import/internal/matrix"
@@ -82,7 +80,8 @@ func load(path string) (config, error) {
 	}
 	return c, nil
 }
-func emit(v any) { _ = json.NewEncoder(os.Stdout).Encode(v) }
+func emit(v any)                    { _ = json.NewEncoder(os.Stdout).Encode(v) }
+func requestEvent(v map[string]any) { _ = json.NewEncoder(os.Stderr).Encode(v) }
 func main() {
 	syscall.Umask(0077)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -245,16 +244,7 @@ func run(ctx context.Context) error {
 		}
 	}
 	client := tgclient.NewClient(c.Telegram.APIID, c.Telegram.APIHash, tgclient.Options{SessionStorage: storage, NoUpdates: true, Middlewares: []tgclient.Middleware{tgclient.MiddlewareFunc(func(next tg.Invoker) tgclient.InvokeFunc {
-		return func(ctx context.Context, in bin.Encoder, out bin.Decoder) error {
-			for {
-				err := next.Invoke(ctx, in, out)
-				waited, waitErr := tgerr.FloodWait(ctx, err)
-				if waited {
-					continue
-				}
-				return waitErr
-			}
-		}
+		return source.WithRequestPolicy(next, requestEvent).Invoke
 	})}})
 	return client.Run(ctx, func(ctx context.Context) error {
 		if cmd == "login" {
@@ -289,7 +279,7 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		src := &source.Source{Client: client, Peer: peer, SelfID: self.ID}
+		src := &source.Source{Client: client, Peer: peer, SelfID: self.ID, Report: requestEvent}
 		if cmd == "inspect" {
 			latest, err := src.Latest(ctx)
 			if err != nil {

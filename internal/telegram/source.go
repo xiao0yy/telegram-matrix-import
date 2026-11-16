@@ -46,6 +46,7 @@ type Source struct {
 	Peer   Peer
 	SelfID int64
 	API    *tg.Client
+	Report func(map[string]any)
 }
 
 func (s *Source) api() *tg.Client {
@@ -308,15 +309,28 @@ func (s *Source) Download(ctx context.Context, m importer.Message, offset int64,
 	if e != nil {
 		return e
 	}
-	pool, e := s.Client.DC(ctx, l.DC, 1)
+	connect, cancel := context.WithTimeout(ctx, requestTimeout)
+	pool, e := s.Client.DC(connect, l.DC, 1)
+	cancel()
 	if e != nil {
 		return &importer.SourceUnavailable{Err: e}
 	}
 	defer pool.Close()
 	// The downloader refreshes expired file references from the original
 	// message and rejects a replacement with a different Telegram file ID.
-	b := s.Client.DownloadVia(pool, l.Input()).WithOffset(offset).WithSize(m.File.Size).WithThreads(1).WithRefresh(fileref.Message(s.Client.API(), p, int(m.ID), l.Input()))
-	_, e = b.Stream(ctx, w)
+	report := func(v map[string]any) {
+		v["message_id"] = m.ID
+		if s.Report != nil {
+			s.Report(v)
+		}
+	}
+	downloadCtx, rpc, cancelDownload := downloadRequests(ctx, pool, requestTimeout, report)
+	defer cancelDownload()
+	b := s.Client.DownloadVia(rpc, l.Input()).WithOffset(offset).WithSize(m.File.Size).WithThreads(1).WithRefresh(fileref.Message(s.Client.API(), p, int(m.ID), l.Input()))
+	_, e = b.Stream(downloadCtx, w)
+	if e != nil && context.Cause(downloadCtx) != nil {
+		e = context.Cause(downloadCtx)
+	}
 	if e == nil || errors.Is(e, fileref.ErrNotFound) || tgerr.Is(e, "FILE_REFERENCE_EXPIRED", "FILE_REFERENCE_INVALID", "LOCATION_INVALID", "FILE_ID_INVALID", "MEDIA_EMPTY", "DOCUMENT_INVALID") {
 		return e
 	}

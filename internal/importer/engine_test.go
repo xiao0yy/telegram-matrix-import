@@ -246,6 +246,42 @@ func TestResumeAfterCancellationStreamsCiphertextAndPreservesOrder(t *testing.T)
 		t.Fatal("tiny version was not reclaimed", o.deleted)
 	}
 }
+
+type timedOutSource struct{ *source }
+
+func (s *timedOutSource) Download(ctx context.Context, m Message, offset int64, w io.Writer) error {
+	s.offsets = append(s.offsets, offset)
+	if offset == 0 {
+		if _, err := w.Write(s.data[:8<<20]); err != nil {
+			return err
+		}
+	}
+	return &SourceUnavailable{Err: context.DeadlineExceeded}
+}
+
+func TestDownloadTimeoutPreservesCheckpointAndPausesWithoutPlaceholder(t *testing.T) {
+	e, path, s, m, o := fixture(t)
+	defer func() { e.Journal.Close() }()
+	e.Source = &timedOutSource{s}
+	if err := e.Run(context.Background()); err == nil {
+		t.Fatal("repeated network timeout must pause the import")
+	}
+	r, err := e.Journal.Next()
+	if err != nil || r == nil {
+		t.Fatal("pending message lost", err)
+	}
+	if r.Message.ID != 4 || r.Media.Offset != 8<<20 || r.Media.State == "failed" || len(r.Payload) != 0 || fmt.Sprint(m.order) != "[1]" {
+		t.Fatalf("network timeout skipped or discarded the attachment: offset=%d state=%s order=%v", r.Media.Offset, r.Media.State, m.order)
+	}
+	reopen(t, e, path)
+	e.Source = s
+	if err = e.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(s.offsets) != "[0 8388608 8388608 8388608]" || fmt.Sprint(m.order) != "[1 4 9]" || len(o.data["key"]) != len(s.data) {
+		t.Fatalf("resume did not reuse checkpoint in order: offsets=%v order=%v", s.offsets, m.order)
+	}
+}
 func TestLostResponsesDoNotDuplicateObjectsOrMessages(t *testing.T) {
 	e, path, _, m, o := fixture(t)
 	defer func() { e.Journal.Close() }()
