@@ -151,6 +151,9 @@ func (e *Engine) deliver(ctx context.Context, r *Record) error {
 			}
 			infrastructureAttempts := 0
 			for r.Media.Attempts < e.Attempts && infrastructureAttempts < e.Attempts {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				err := e.transfer(ctx, r)
 				if err == nil {
 					break
@@ -188,7 +191,7 @@ func (e *Engine) deliver(ctx context.Context, r *Record) error {
 				}
 			}
 			if r.Media.State != "ready" {
-				if r.Media.ErrorKind != "attachment" {
+				if r.Media.Attempts < e.Attempts {
 					return fmt.Errorf("media infrastructure failed; checkpoint retained: %w", lastError)
 				}
 				// Register cleanup before committing the failed timeline entry. A crash
