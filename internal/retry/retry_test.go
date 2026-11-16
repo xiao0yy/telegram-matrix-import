@@ -97,3 +97,14 @@ func TestErrorClassification(t *testing.T) {
 		}
 	}
 }
+
+func TestSDKGracefulShutdownDoesNotReportCompletion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	last := ""
+	p := Policy{Report: func(s Status) error { last = s.State; return nil }}
+	err := p.Run(ctx, func(context.Context) error { cancel(); return nil })
+	if !errors.Is(err, context.Canceled) || last != "stopped" {
+		t.Fatalf("cancellation reported as completion: %v %s", err, last)
+	}
+}

@@ -111,6 +111,11 @@ func (p Policy) Run(ctx context.Context, run func(context.Context) error) error 
 			return err
 		}
 		err := run(ctx)
+		// Some SDKs return nil on orderly shutdown. Cancellation is still a
+		// stopped command, never proof that the import finished.
+		if err == nil && ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		if err == nil {
 			return report(Status{State: "complete", Attempt: attempt})
 		}
